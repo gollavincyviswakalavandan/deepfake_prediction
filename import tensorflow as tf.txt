@@ -1,0 +1,180 @@
+# ==========================================
+# advanced_video_analysis.py
+# DeepFake Video Analysis with Uncertainty + Grad-CAM
+# ==========================================
+
+import cv2
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+
+# ----------------------------
+# CONFIG
+# ----------------------------
+IMG_SIZE = 224
+T = 10  # Monte Carlo runs
+video_path = "videos/test_video.mp4"
+model_path = "model/deepfake_model.h5"
+threshold = 0.7
+
+# ----------------------------
+# LOAD MODEL
+# ----------------------------
+model = tf.keras.models.load_model(model_path)
+
+# ----------------------------
+# GRAD-CAM FUNCTION
+# ----------------------------
+def generate_gradcam(model, img_array):
+    last_conv_layer_name = None
+
+    for layer in reversed(model.layers):
+        if isinstance(layer, tf.keras.layers.Conv2D):
+            last_conv_layer_name = layer.name
+            break
+
+    grad_model = tf.keras.models.Model(
+        [model.inputs],
+        [model.get_layer(last_conv_layer_name).output, model.output]
+    )
+
+    with tf.GradientTape() as tape:
+        conv_outputs, predictions = grad_model(img_array)
+        loss = predictions[:, 0]
+
+    grads = tape.gradient(loss, conv_outputs)
+    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
+
+    conv_outputs = conv_outputs[0]
+    heatmap = conv_outputs @ pooled_grads[..., tf.newaxis]
+    heatmap = tf.squeeze(heatmap)
+
+    heatmap = np.maximum(heatmap, 0)
+    heatmap /= np.max(heatmap) + 1e-10
+
+    return heatmap.numpy()
+
+# ----------------------------
+# OPEN VIDEO
+# ----------------------------
+cap = cv2.VideoCapture(video_path)
+
+if not cap.isOpened():
+    print("❌ Could not open video.")
+    exit()
+else:
+    print("✅ Video opened successfully.")
+
+fps = cap.get(cv2.CAP_PROP_FPS)
+
+frame_number = 0
+frame_means = []
+frame_variances = []
+suspicious_frames = []
+
+print("Processing video...")
+
+while cap.isOpened():
+    ret, frame = cap.read()
+
+    if not ret:
+        break
+
+    frame_number += 1
+
+    img = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
+    img_norm = img / 255.0
+    img_array = np.expand_dims(img_norm, axis=0)
+
+    preds = []
+
+    for _ in range(T):
+        prediction = model(img_array, training=True)
+        preds.append(prediction.numpy()[0][0])
+
+    mean_pred = np.mean(preds)
+    variance = np.var(preds)
+
+    frame_means.append(mean_pred)
+    frame_variances.append(variance)
+
+    if mean_pred > threshold:
+        suspicious_frames.append((frame_number, frame.copy()))
+
+    print(f"Frame {frame_number}: Mean={mean_pred:.4f}, Var={variance:.6f}")
+
+cap.release()
+
+print("Video processing complete.")
+print("Total frames:", frame_number)
+print("Suspicious frames:", len(suspicious_frames))
+
+# ----------------------------
+# PLOT PROBABILITY GRAPH
+# ----------------------------
+plt.figure()
+plt.plot(frame_means)
+plt.title("Fake Probability Over Time")
+plt.xlabel("Frame Number")
+plt.ylabel("Fake Probability")
+plt.savefig("probability_graph.png")
+plt.show()
+
+# ----------------------------
+# PLOT UNCERTAINTY GRAPH
+# ----------------------------
+plt.figure()
+plt.plot(frame_variances)
+plt.title("Uncertainty Over Time")
+plt.xlabel("Frame Number")
+plt.ylabel("Variance")
+plt.savefig("uncertainty_graph.png")
+plt.show()
+
+# ----------------------------
+# SAVE CSV RESULTS
+# ----------------------------
+results = pd.DataFrame({
+    "Frame": list(range(1, len(frame_means)+1)),
+    "Fake_Probability": frame_means,
+    "Uncertainty": frame_variances
+})
+
+results.to_csv("video_analysis_results.csv", index=False)
+print("Results saved to video_analysis_results.csv")
+
+# ----------------------------
+# GENERATE GRAD-CAM
+# ----------------------------
+os.makedirs("gradcam_outputs", exist_ok=True)
+
+print("Generating Grad-CAM for suspicious frames...")
+
+for frame_id, frame in suspicious_frames[:5]:  # limit to first 5
+    img = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
+    img_norm = img / 255.0
+    img_array = np.expand_dims(img_norm, axis=0)
+
+    heatmap = generate_gradcam(model, img_array)
+
+    heatmap = cv2.resize(heatmap, (IMG_SIZE, IMG_SIZE))
+    heatmap = np.uint8(255 * heatmap)
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+
+    overlay = heatmap * 0.4 + img
+
+    output_path = f"gradcam_outputs/gradcam_frame_{frame_id}.jpg"
+    cv2.imwrite(output_path, overlay)
+
+print("Grad-CAM images saved in gradcam_outputs folder.")
+
+# ----------------------------
+# PRINT SUSPICIOUS TIME RANGE
+# ----------------------------
+if suspicious_frames:
+    times = [frame_id / fps for frame_id, _ in suspicious_frames]
+    print(f"Suspicious segment from {min(times):.2f}s to {max(times):.2f}s")
+else:
+    print("No suspicious segment detected.")

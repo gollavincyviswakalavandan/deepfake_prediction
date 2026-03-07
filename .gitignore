@@ -1,0 +1,35 @@
+# Deep Learning / ML ignores
+*.h5
+*.hdf5
+*.keras
+
+# model folders
+model/
+models/
+weights/
+checkpoints/
+
+# datasets
+data/
+dataset/
+extracted_frames/
+gradcam_outputs/
+gradcam_output/
+
+# video files
+*.mp4
+*.avi
+*.mov
+
+# virtual environment
+venv/
+.venv/
+env/
+
+# python cache
+__pycache__/
+*.pyc
+
+# system
+.DS_Store
+Thumbs.db
