@@ -1,3 +1,15 @@
+Use the commands to run the project
+
+
+cd "Current folder path"
+
+chmod +x run_pipeline.sh
+
+./run_pipeline.sh
+
+----------------------------------------------------------------------------------------------
+
+
 # 🎥 Uncertainty-Aware DeepFake Video Detection
 
 ## 📌 Overview
